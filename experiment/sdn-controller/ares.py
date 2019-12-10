@@ -29,14 +29,14 @@ from ryu.app.wsgi import WSGIApplication
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 
-from abac import guard
-from vakt import Inquiry
+from abac import AccessControl
 from mms_client import Mms
 from ryu.ofproto.ether import ETH_TYPE_IP
 from datetime import datetime
 
 LOG = logging.getLogger('ryu.app.ofctl_rest')
 
+SCD_PATH = 'GOOSE_SV.scd'
 MMS_IP = '10.0.0.1'
 MMS_TCP = 102
 ETH_TYPE_8021X = 0x888E
@@ -47,8 +47,8 @@ BROADCAST_MAC = u'ff:ff:ff:ff:ff:ff'
 CONTROLLER_MAC = u'00:00:00:00:00:01'
 
 IEDS = {
-    'ied01': {'ip': '10.0.0.4', 'port': 2},
-    'ied02': {'ip': '10.0.0.5', 'port': 3}
+    'SEL_421_1': {'ip': '10.0.0.4', 'port': 2},
+    'SEL_421_2': {'ip': '10.0.0.5', 'port': 3}
 }
 MMS_CONTROLLER = {1: ofproto_v1_3.OFPP_LOCAL, 2: 1}
 
@@ -142,6 +142,7 @@ class StatsController(ControllerBase):
         self.authenticated = data['authenticated']
         self.s1 = self.dpset.get(1)
         self.s2 = self.dpset.get(2)
+        self.abac = data['abac']
 
     def auth_user(self, req, mac, identity, **_kwargs):
         # TODO Remove flow after being unauthenticated
@@ -164,11 +165,17 @@ class StatsController(ControllerBase):
 
             log('ABAC: %s can subscribe GOOSE %s frames?'
                 % (identity, publish_goose_to))
-            publish_goose = Inquiry(
-                action={'type': 'publish', 'dest': publish_goose_to},
-                resource='GOOSE', subject=identity)
+            if publish_goose_to in self.authenticated:
+                action = 'subscribe'
+            else:
+                action = 'publish'
+            publish_goose = {
+                'ied': identity,
+                'action': action,
+                'address': {'mac': publish_goose_to},
+                'protocol': 'GOOSE'}
 
-            if guard.is_allowed(publish_goose):
+            if self.abac.is_allowed(**publish_goose):
                 self.authenticated[mac] = {
                     'address': mac, 'identity': identity}
                 if publish_goose_to in self.authenticated:
@@ -210,6 +217,7 @@ class RestStatsApi(app_manager.RyuApp):
         self.data = {}
         self.data['dpset'] = self.dpset
         self.data['waiters'] = self.waiters
+        self.data['abac'] = AccessControl(SCD_PATH)
         mapper = wsgi.mapper
 
         # authenticated hosts
